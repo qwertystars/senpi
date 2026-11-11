@@ -91,7 +91,7 @@ import {
 import { getCursorContextLimit } from "@earendil-works/pi-ai/utils/cursor-context-limit";
 import { isOAuthRefreshUnavailableError } from "@earendil-works/pi-ai/utils/oauth-refresh-error";
 import { retryTransientCall } from "@earendil-works/pi-ai/utils/retry";
-import { extract429RetryAfterMs, parseRetryAfterMsMarker } from "@earendil-works/pi-ai/utils/retry-hint";
+import { extract429RetryAfterMs, parseRetryAfterMsMarker, parseStatedRetryInstantMs } from "@earendil-works/pi-ai/utils/retry-hint";
 import { retryBackoffDelayMs } from "@earendil-works/pi-ai/utils/retry-profile/backoff";
 import type { ToolRuntimeKind } from "../cli/tool-runtime.ts";
 import { getAgentDir } from "../config.ts";
@@ -13198,7 +13198,10 @@ export class AgentSession {
 		const markerMs = parseRetryAfterMsMarker(errorMessage);
 		if (markerMs !== undefined) return markerMs;
 		const hintMs = extract429RetryAfterMs({ bodyText: errorMessage });
-		return hintMs;
+		if (hintMs !== undefined) return hintMs;
+		// The anthropic-subscription pool states the instant it unblocks; deferring to it beats the
+		// in-turn 2s/4s/8s burst the pool has already refused.
+		return parseStatedRetryInstantMs(errorMessage, Date.now());
 	}
 
 	/**
@@ -13545,6 +13548,24 @@ export class AgentSession {
 				}
 			} else if (is429Class) {
 				const hintMs = this._getProviderRetryDelayMs(errorMessage);
+				// A pool refusal names the instant it can serve again. The tier ladder would spend its
+				// whole budget retrying before that instant (and tier2 clamps the wait instead of failing),
+				// so end the turn and let the provider-retry wake resume at the stated time.
+				const statedInstantMs = parseStatedRetryInstantMs(errorMessage, Date.now());
+				if (statedInstantMs !== undefined && statedInstantMs > this.settingsManager.getProviderRetrySettings().maxRetryDelayMs) {
+					if (this._retryAttempt > 0) {
+						this._emit({
+							type: "auto_retry_end",
+							success: false,
+							attempt: this._retryAttempt,
+							finalError: message.errorMessage,
+						});
+					}
+					this._retryAttempt = 0;
+					this._resetHintTierState();
+					this._resolveRetry();
+					return "not-handled";
+				}
 				const hintSettings = this.settingsManager.getHintPolicySettings();
 				const tier = classifyRateLimitedWait(hintMs, hintSettings);
 				is429TierRouted = true;

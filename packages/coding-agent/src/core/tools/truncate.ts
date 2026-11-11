@@ -3,14 +3,38 @@
  *
  * Truncation is based on two independent limits - whichever is hit first wins:
  * - Line limit (default: 2000 lines)
- * - Byte limit (default: 50KB)
+ * - Byte limit (default: 40KB)
  *
  * Never returns partial lines (except bash tail truncation edge case).
  */
 
 export const DEFAULT_MAX_LINES = 2000;
-export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
+export const DEFAULT_MAX_BYTES = 40 * 1024; // 40KB, ~10k tokens at chars/4
 export const GREP_MAX_LINE_LENGTH = 500; // Max chars per grep match line
+
+/** Env override for the model-facing tool output byte ceiling. */
+export const TOOL_OUTPUT_MAX_BYTES_ENV = "SENPI_TOOL_OUTPUT_MAX_BYTES";
+const MIN_OUTPUT_MAX_BYTES = 1024;
+const MAX_OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
+
+function isUsableOutputMaxBytes(value: number): boolean {
+	return Number.isInteger(value) && value >= MIN_OUTPUT_MAX_BYTES && value <= MAX_OUTPUT_MAX_BYTES;
+}
+
+/**
+ * Resolve the byte ceiling for model-facing tool output: an explicit valid override, else the
+ * env override, else the 40KB default. Invalid values are ignored, never thrown.
+ */
+export function resolveOutputMaxBytes(override?: number): number {
+	if (override !== undefined && isUsableOutputMaxBytes(override)) {
+		return override;
+	}
+	const fromEnv = Number(process.env[TOOL_OUTPUT_MAX_BYTES_ENV]);
+	if (Number.isFinite(fromEnv) && isUsableOutputMaxBytes(fromEnv)) {
+		return fromEnv;
+	}
+	return DEFAULT_MAX_BYTES;
+}
 
 export interface TruncationResult {
 	/** The truncated content */
@@ -40,7 +64,7 @@ export interface TruncationResult {
 export interface TruncationOptions {
 	/** Maximum number of lines (default: 2000) */
 	maxLines?: number;
-	/** Maximum number of bytes (default: 50KB) */
+	/** Maximum number of bytes (default: 40KB, or the SENPI_TOOL_OUTPUT_MAX_BYTES override) */
 	maxBytes?: number;
 }
 
@@ -68,6 +92,31 @@ export function formatSize(bytes: number): string {
 	}
 }
 
+export interface TruncationNotice {
+	kind: "head" | "tail";
+	startLine: number;
+	endLine: number;
+	totalLines: number;
+	nextOffset?: number;
+	fullOutputPath?: string;
+	maxBytes: number;
+}
+
+/**
+ * The explicit, self-describing footer that follows a truncated tool output. The head form names
+ * the exact offset that continues the read; the tail form names the spill file holding the rest.
+ */
+export function formatTruncationNotice(notice: TruncationNotice): string {
+	if (notice.kind === "head" && notice.nextOffset !== undefined) {
+		return `[truncated - refetch with offset=${notice.nextOffset} to continue; showing lines ${notice.startLine}-${notice.endLine} of ${notice.totalLines} (${formatSize(notice.maxBytes)} limit)]`;
+	}
+	if (notice.kind === "tail") {
+		const spill = notice.fullOutputPath === undefined ? "" : `; Full output: ${notice.fullOutputPath}`;
+		return `[truncated - showing last ${notice.startLine}-${notice.endLine} of ${notice.totalLines} lines${spill}]`;
+	}
+	return `[truncated - showing lines ${notice.startLine}-${notice.endLine} of ${notice.totalLines} (${formatSize(notice.maxBytes)} limit)]`;
+}
+
 /**
  * Truncate content from the head (keep first N lines/bytes).
  * Suitable for file reads where you want to see the beginning.
@@ -77,7 +126,7 @@ export function formatSize(bytes: number): string {
  */
 export function truncateHead(content: string, options: TruncationOptions = {}): TruncationResult {
 	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
-	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+	const maxBytes = options.maxBytes ?? resolveOutputMaxBytes();
 
 	const totalBytes = Buffer.byteLength(content, "utf-8");
 	const lines = splitLinesForCounting(content);
@@ -167,7 +216,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
  */
 export function truncateTail(content: string, options: TruncationOptions = {}): TruncationResult {
 	const maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
-	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+	const maxBytes = options.maxBytes ?? resolveOutputMaxBytes();
 
 	const totalBytes = Buffer.byteLength(content, "utf-8");
 	const lines = splitLinesForCounting(content);

@@ -1,5 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { appendRetryAfterMsMarker, extract429RetryAfterMs, parseRetryAfterMsMarker } from "../src/utils/retry-hint.ts";
+import {
+	appendRetryAfterMsMarker,
+	extract429RetryAfterMs,
+	parseRetryAfterMsMarker,
+	parseStatedRetryInstantMs,
+} from "../src/utils/retry-hint.ts";
 
 /* ---------- helpers ---------- */
 
@@ -631,5 +636,62 @@ describe("limit reset prose", () => {
 
 	it("a non-rate-limited body that mentions a reset is not a hint", () => {
 		expect(extract429RetryAfterMs({ status: 500, bodyText: "cache will reset in 5 minutes" })).toBeUndefined();
+	});
+});
+
+/* ---------- 10. Stated pool unblock instant ---------- */
+
+// The exact refusal lane lead-03 observed from the anthropic-subscription pool. The instant is followed by
+// a sentence period, which must not leak into Date.parse.
+const POOL_REFUSAL_MESSAGE = [
+	"All Claude accounts for anthropic-subscription are currently blocked (rate limit or auth errors).",
+	"  Soonest automatic retry: 2026-11-11T08:50:00.000Z.",
+	"  /claude-account list  - inspect account states",
+	"  /login anthropic-subscription  - add another account",
+	"No request was sent: the account pool refused it locally.",
+].join("\n");
+
+const STATED_AT = "2026-11-11T08:50:00.000Z";
+const STATED_NOW = "2026-11-11T07:32:18.673Z";
+
+describe("parseStatedRetryInstantMs", () => {
+	it("reads the pool refusal's stated unblock instant as a delay", () => {
+		const nowMs = Date.parse(STATED_NOW);
+		const instantMs = Date.parse(STATED_AT);
+		expect(parseStatedRetryInstantMs(POOL_REFUSAL_MESSAGE, nowMs)).toBe(instantMs - nowMs);
+		expect(instantMs - nowMs).toBe(4_661_327);
+	});
+
+	it("matches the phrase case-insensitively with no space after the colon", () => {
+		expect(parseStatedRetryInstantMs(`soonest automatic retry:${STATED_AT}.`, Date.parse(STATED_NOW))).toBe(
+			Date.parse(STATED_AT) - Date.parse(STATED_NOW),
+		);
+	});
+
+	it("clamps a stated instant already past to 0", () => {
+		expect(parseStatedRetryInstantMs(POOL_REFUSAL_MESSAGE, Date.parse("2026-11-11T09:00:00.000Z"))).toBe(0);
+	});
+
+	it("returns undefined when the phrase is absent", () => {
+		expect(parseStatedRetryInstantMs("All Claude accounts are blocked.", Date.parse(STATED_NOW))).toBeUndefined();
+	});
+
+	it("returns undefined when the stated instant is garbage", () => {
+		expect(
+			parseStatedRetryInstantMs("Soonest automatic retry: after re-login.", Date.parse(STATED_NOW)),
+		).toBeUndefined();
+	});
+
+	it("ignores an unrelated ISO instant in prose", () => {
+		expect(
+			parseStatedRetryInstantMs("Session started at 2026-11-11T08:50:00.000Z.", Date.parse(STATED_NOW)),
+		).toBeUndefined();
+	});
+
+	it("ignores the typed retry-after-ms marker and still reads the stated instant", () => {
+		const nowMs = Date.parse(STATED_NOW);
+		expect(parseStatedRetryInstantMs(`${POOL_REFUSAL_MESSAGE} (retry-after-ms: 900)`, nowMs)).toBe(
+			Date.parse(STATED_AT) - nowMs,
+		);
 	});
 });
