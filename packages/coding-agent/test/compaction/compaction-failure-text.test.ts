@@ -51,6 +51,14 @@ describe("formatCompactionFailure", () => {
 		expect(text).toContain("retry.fallbackChains");
 	});
 
+	it("names the account-pool retry step for a blocked account pool", () => {
+		const cause = "All Claude accounts for anthropic-subscription are currently blocked (rate limit or auth errors).";
+		expect(compactionFailureStep("compaction", cause)).toBe("accounts-blocked");
+		expect(formatCompactionFailure("compaction", cause)).toContain(
+			"All Claude subscription accounts are rate-limited or failing to authenticate, so the earlier conversation was not summarized. Wait for the retry time named in the cause below (or run /claude-account list), then compact again.",
+		);
+	});
+
 	it.each<readonly [CompactionFailureKind, string, CompactionFailureStep]>([
 		["overflow-recovery", "Connection error.", "resend"],
 		["overflow-recovery", "fetch failed", "resend"],
@@ -60,6 +68,11 @@ describe("formatCompactionFailure", () => {
 		["overflow-recovery", "Nothing to compact (session too small)", "larger-context"],
 		["compaction", "Connection error.", "compact-again"],
 		["compaction", "Nothing to compact (session too small)", "nothing-to-compact"],
+		[
+			"compaction",
+			"All Claude accounts for anthropic-subscription are currently blocked (rate limit or auth errors).",
+			"accounts-blocked",
+		],
 		["auto-compaction", "Already compacted", "nothing-to-compact"],
 		["compaction", "WebSocket closed 1006 Connection ended", "provider"],
 		["compaction", "Compaction rejected: absolute compaction cap reached for this session.", "self-explained"],

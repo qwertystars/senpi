@@ -11217,7 +11217,42 @@ export class AgentSession {
 		if (this._isCompactionOnCooldown() || this._isCompactionDelegated() || this._hasSupersedingCompactionClaim()) {
 			return false;
 		}
+		// With no assistant usage after the latest compaction, `contextTokens` is only the chars/4
+		// content estimate (a documented overestimate). Admit the turn so the provider measures real
+		// usage, instead of forcing another compaction from the estimate alone (#S5).
+		if (this._isContextEstimateOnlyAfterCompaction()) {
+			return false;
+		}
 		throw new RequiredCompactionError();
+	}
+
+	/**
+	 * True when the projected context after the latest compaction carries no assistant usage in the
+	 * kept or post-compaction entries, so context size is estimate-only. The compaction entry is the
+	 * leaf and the kept entries from `firstKeptEntryId` sit before it, so the scan starts there.
+	 */
+	private _isContextEstimateOnlyAfterCompaction(): boolean {
+		const branchEntries = this.sessionManager.getBranch();
+		const latestCompaction = getLatestCompactionEntry(branchEntries);
+		if (!latestCompaction) return false;
+		const compactionIndex = branchEntries.lastIndexOf(latestCompaction);
+		const firstKeptEntryId = latestCompaction.firstKeptEntryId;
+		const keptIndex =
+			firstKeptEntryId === null ? -1 : branchEntries.findIndex((entry) => entry.id === firstKeptEntryId);
+		const startIndex = keptIndex === -1 ? compactionIndex + 1 : keptIndex;
+		for (let i = branchEntries.length - 1; i >= startIndex; i--) {
+			const entry = branchEntries[i];
+			if (entry.type === "message" && entry.message.role === "assistant") {
+				const assistant = entry.message;
+				if (
+					assistant.stopReason !== "aborted" &&
+					assistant.stopReason !== "error" &&
+					calculateContextTokens(assistant.usage) > 0
+				)
+					return false;
+			}
+		}
+		return true;
 	}
 
 	/** Share resume's branch provenance rule without projecting trusted usage on every request. */
