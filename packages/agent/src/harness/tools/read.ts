@@ -133,7 +133,6 @@ export function createReadTool<TContext extends ExecutionToolContext = Execution
 				offset,
 				limit,
 				folder,
-				truncated: truncation.truncated,
 			});
 			let outputText: string;
 			let details: ReadToolDetails | undefined;

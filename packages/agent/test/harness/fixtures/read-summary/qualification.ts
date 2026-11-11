@@ -63,7 +63,6 @@ export async function qualifySignatures() {
 				path,
 				text: source,
 				folder: folders[fixture.language === "js" ? "js" : "ts"],
-				truncated: false,
 			})?.text ?? source;
 		return {
 			id: path,

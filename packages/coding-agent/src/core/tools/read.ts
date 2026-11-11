@@ -220,7 +220,6 @@ export function createReadToolDefinition(
 									offset,
 									limit,
 									folder,
-									truncated: truncation.truncated,
 								});
 								let outputText: string;
 								let notice: string | undefined;

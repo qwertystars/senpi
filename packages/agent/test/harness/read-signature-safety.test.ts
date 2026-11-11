@@ -34,8 +34,7 @@ describe("declaration boundary safety (#1639)", () => {
 		// Then the direct candidate and the actual default adapter preserve every complete declaration.
 		const view = createSegmentedReadView({ text, parsed });
 		const candidate = view.status === "summary" ? view.rendered.text : text;
-		const actual =
-			createDefaultReadSummary({ path, text, folder: selectedReadFolder, truncated: false })?.text ?? text;
+		const actual = createDefaultReadSummary({ path, text, folder: selectedReadFolder })?.text ?? text;
 		for (const declaration of declarations) {
 			expect(candidate).toContain(declaration);
 			expect(actual).toContain(declaration);
