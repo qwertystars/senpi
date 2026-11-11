@@ -12,6 +12,7 @@ export type CompactionFailureStep =
 	| "resend"
 	| "larger-context"
 	| "nothing-to-compact"
+	| "accounts-blocked"
 	| "compact-again"
 	| "self-explained";
 
@@ -28,6 +29,8 @@ const STEP_TEXT: Record<Exclude<CompactionFailureStep, "provider" | "self-explai
 		"The conversation is larger than the model's context, and compacting it did not finish. Start a new session, or switch to a larger-context model.",
 	"nothing-to-compact":
 		"There is nothing older to summarize yet, so the context was left as it is. No action is needed.",
+	"accounts-blocked":
+		"All Claude subscription accounts are rate-limited or failing to authenticate, so the earlier conversation was not summarized. Wait for the retry time named in the cause below (or run /claude-account list), then compact again.",
 	"compact-again":
 		"The summary of the earlier conversation could not be written. Compact again; if it keeps failing, start a new session or choose another model.",
 };
@@ -36,6 +39,8 @@ const STEP_TEXT: Record<Exclude<CompactionFailureStep, "provider" | "self-explai
 const NOTHING_TO_COMPACT = /^(?:Nothing to compact|Already compacted)\b/;
 /** Rejection and cancellation texts that already name their own next step. */
 const SELF_EXPLAINED = /^Compaction (?:rejected|cancelled)\b/;
+/** An account-pool refusal: the accounts are blocked, nothing was attempted, nothing was written. */
+const ACCOUNTS_BLOCKED = /^All Claude accounts for /;
 
 function providerText(cause: string, model: string | undefined): string | undefined {
 	return describeProviderFailureForUser(cause, { model, usageLimit: usageLimitScope(cause) });
@@ -51,6 +56,7 @@ export function compactionFailureStep(
 	if (providerText(cause, options.model) !== undefined) return "provider";
 	if (kind === "overflow-recovery") return isRetryableErrorMessage(cause) ? "resend" : "larger-context";
 	if (NOTHING_TO_COMPACT.test(cause)) return "nothing-to-compact";
+	if (ACCOUNTS_BLOCKED.test(cause)) return "accounts-blocked";
 	return "compact-again";
 }
 

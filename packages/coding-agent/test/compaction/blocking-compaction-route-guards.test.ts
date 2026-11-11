@@ -190,4 +190,50 @@ describe("blocking compaction route guards (issue #527)", () => {
 
 		expect(beginCompaction).toHaveBeenCalledTimes(1);
 	});
+
+	it("counts ineffective accepted compactions as breaker failures", async () => {
+		const handlers = captureHandlers();
+		const beforeAgentStart = handlers.get("before_agent_start");
+		const sessionCompact = handlers.get("session_compact");
+		expect(beforeAgentStart).toBeDefined();
+		expect(sessionCompact).toBeDefined();
+		const harness = createBlockingContext({ usageTokens: 9_950 });
+		registrations.push(harness.registration);
+		harness.registration.setResponses(
+			Array.from({ length: SUMMARIZATION_ATTEMPTS }, () => fauxAssistantMessage("## Goal\ncompact summary")),
+		);
+
+		for (let round = 0; round < FAILURE_TRIP_THRESHOLD; round++) {
+			await sessionCompact?.(acceptedCompactionEvent(round, 0) as never, harness.ctx);
+		}
+		const compaction = beforeAgentStart?.(createBeforeAgentStartEvent() as never, harness.ctx);
+		if (compaction) await settleRetryBackoff(compaction);
+
+		expect(harness.registration.state.callCount).toBe(0);
+	});
+
+	it("resets the breaker when an accepted compaction is effective", async () => {
+		const handlers = captureHandlers();
+		const beforeAgentStart = handlers.get("before_agent_start");
+		const sessionCompact = handlers.get("session_compact");
+		expect(beforeAgentStart).toBeDefined();
+		expect(sessionCompact).toBeDefined();
+		const harness = createBlockingContext({ usageTokens: 9_950 });
+		registrations.push(harness.registration);
+		harness.registration.setResponses(
+			Array.from({ length: SUMMARIZATION_ATTEMPTS }, () => fauxAssistantMessage("## Goal\ncompact summary")),
+		);
+
+		await sessionCompact?.(acceptedCompactionEvent(0, 0) as never, harness.ctx);
+		await sessionCompact?.(acceptedCompactionEvent(1, 0) as never, harness.ctx);
+		await sessionCompact?.(acceptedCompactionEvent(2, 8_000) as never, harness.ctx);
+		await sessionCompact?.(acceptedCompactionEvent(3, 0) as never, harness.ctx);
+		await sessionCompact?.(acceptedCompactionEvent(4, 0) as never, harness.ctx);
+		const compaction = beforeAgentStart?.(createBeforeAgentStartEvent() as never, harness.ctx);
+		if (compaction) await settleRetryBackoff(compaction);
+
+		// The effective compaction cleared the two ineffectives, so the breaker stayed
+		// open and the next blocking attempt was admitted (one successful summary call).
+		expect(harness.registration.state.callCount).toBe(1);
+	});
 });

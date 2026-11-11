@@ -1,7 +1,7 @@
 import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExtensionAPI } from "../../../src/core/extensions/index.ts";
-import type { InlineExtension } from "../../../src/index.ts";
+import { RequiredCompactionError, type InlineExtension } from "../../../src/index.ts";
 import { createHarness, type Harness } from "../harness.ts";
 
 const harnesses: Harness[] = [];
@@ -48,6 +48,61 @@ function privateSessionMethod(session: Harness["session"], name: string): (...ar
 	return method.bind(session);
 }
 
+function createUsage(totalTokens: number) {
+	return {
+		input: totalTokens,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
+}
+
+/**
+ * An over-threshold context whose only measurement after the latest compaction is
+ * the chars/4 content estimate; `usageAfterCompaction` adds a post-boundary
+ * assistant usage, which makes the measurement provider-reported instead.
+ */
+async function createEstimateOnlyHarness(usageAfterCompaction?: number): Promise<Harness> {
+	const harness = await createHarness({
+		models: [{ id: "faux-large", contextWindow: 20_000, maxTokens: 4_096 }],
+		settings: { compaction: { enabled: true, reserveTokens: 1_000, speculativeEnabled: false } },
+	});
+	harnesses.push(harness);
+	const model = harness.getModel();
+	const timestamp = Date.now() - 5_000;
+	harness.sessionManager.appendMessage({
+		role: "user",
+		content: [{ type: "text", text: "work through the todo list" }],
+		timestamp: timestamp - 2,
+	});
+	harness.sessionManager.appendMessage({
+		...fauxAssistantMessage("progress note", { timestamp: timestamp - 1 }),
+		api: model.api,
+		provider: model.provider,
+		model: model.id,
+		usage: createUsage(18_000),
+	});
+	harness.sessionManager.appendCompaction("earlier work summarized", null, 18_000);
+	harness.sessionManager.appendMessage({
+		role: "user",
+		content: [{ type: "text", text: "next todo item ".concat("x".repeat(100_000)) }],
+		timestamp,
+	});
+	if (usageAfterCompaction !== undefined) {
+		harness.sessionManager.appendMessage({
+			...fauxAssistantMessage("post-compaction progress", { timestamp }),
+			api: model.api,
+			provider: model.provider,
+			model: model.id,
+			usage: createUsage(usageAfterCompaction),
+		});
+	}
+	harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+	return harness;
+}
+
 async function createOverThresholdHarness(extension: InlineExtension): Promise<Harness> {
 	const harness = await createHarness({
 		models: [{ id: "faux-large", contextWindow: 20_000, maxTokens: 4_096 }],
@@ -75,6 +130,29 @@ async function createOverThresholdHarness(extension: InlineExtension): Promise<H
 	harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
 	return harness;
 }
+
+describe("compaction admission with an estimate-only context after the latest compaction", () => {
+	it("admits the turn instead of forcing compaction from the content estimate alone", async () => {
+		// Given: the latest compaction kept no assistant usage, so the context is over
+		// the threshold only by the chars/4 content estimate.
+		const harness = await createEstimateOnlyHarness();
+
+		// When / Then: admission lets the provider measure the real usage.
+		const enforceBeforeProvider = privateSessionMethod(harness.session, "_enforceCompactionBeforeProvider");
+		await expect(enforceBeforeProvider(undefined, false, "pre_prompt")).resolves.toBe(false);
+	});
+
+	it("still requires compaction when post-compaction usage is really above the threshold", async () => {
+		// Given: a post-compaction assistant reported usage above the threshold valve.
+		const harness = await createEstimateOnlyHarness(19_500);
+
+		// When / Then: the gate still refuses the oversized turn.
+		const enforceBeforeProvider = privateSessionMethod(harness.session, "_enforceCompactionBeforeProvider");
+		await expect(enforceBeforeProvider(undefined, false, "pre_prompt")).rejects.toBeInstanceOf(
+			RequiredCompactionError,
+		);
+	});
+});
 
 describe("issue #531: compaction cooldown must not brick prompt admission", () => {
 	it("lets the turn proceed without compaction when the breaker cancelled it", async () => {

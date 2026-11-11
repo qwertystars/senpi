@@ -975,12 +975,12 @@ export default function compactionExtension(
 			);
 			const keptEntries = firstKeptIndex === -1 ? [] : branchEntries.slice(firstKeptIndex);
 			state = cap.incrementAccepted(state);
-			state = breaker.recordSuccess(state);
 			reminderState = createInitialReminderState();
 			const details = compactEvent.compactionEntry.details as
 				| { structuralYield?: { savedTokens: number; savingsRatio: number } }
 				| undefined;
 			const sy = details?.structuralYield;
+			let effective = true;
 			if (sy && typeof sy.savedTokens === "number" && typeof sy.savingsRatio === "number") {
 				state = {
 					...state,
@@ -994,6 +994,7 @@ export default function compactionExtension(
 					})
 				) {
 					state = cap.incrementIneffective(state);
+					effective = false;
 					getLogger(ctx).debug("ineffective_counted", {
 						tokensBefore: compactEvent.compactionEntry.tokensBefore,
 						savedTokens: sy.savedTokens,
@@ -1001,6 +1002,9 @@ export default function compactionExtension(
 					});
 				}
 			}
+			state = effective
+				? breaker.recordSuccess(state)
+				: breaker.recordFailure(state, Date.now(), { route: compactEvent.reason });
 			resetOnSessionCompact(degradationState);
 			todoBridge.restoreTodosIfMissing(pi, ctx);
 			const usage = ctx.getContextUsage();
