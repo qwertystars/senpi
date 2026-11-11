@@ -13200,8 +13200,10 @@ export class AgentSession {
 		const hintMs = extract429RetryAfterMs({ bodyText: errorMessage });
 		if (hintMs !== undefined) return hintMs;
 		// The anthropic-subscription pool states the instant it unblocks; deferring to it beats the
-		// in-turn 2s/4s/8s burst the pool has already refused.
-		return parseStatedRetryInstantMs(errorMessage, Date.now());
+		// in-turn 2s/4s/8s burst the pool has already refused. A past instant is no hint at all, so
+		// the usual no-hint fallback routing still runs.
+		const statedMs = parseStatedRetryInstantMs(errorMessage, Date.now());
+		return statedMs !== undefined && statedMs > 0 ? statedMs : undefined;
 	}
 
 	/**
@@ -13515,9 +13517,36 @@ export class AgentSession {
 					errorMessage,
 				);
 			if (is429Class) this._runLimitFailure = true;
+			// A pool refusal names the instant it can serve again. Retrying the tier ladder before that
+			// instant only spends the budget: hand a configured fallback the turn, else end it and let the
+			// provider-retry wake resume at the stated time.
+			const statedInstantMs = is429Class ? parseStatedRetryInstantMs(errorMessage, Date.now()) : undefined;
+			const statedBeyondCap =
+				statedInstantMs !== undefined &&
+				statedInstantMs > this.settingsManager.getProviderRetrySettings().maxRetryDelayMs;
+			if (statedBeyondCap) {
+				switchedFallback = await tryFallback("transient", { errorMessage, retryAfterMs: statedInstantMs });
+				if (switchedFallback) {
+					this._retryAttempt = 1;
+					is429TierRouted = true;
+				} else {
+					if (this._retryAttempt > 0) {
+						this._emit({
+							type: "auto_retry_end",
+							success: false,
+							attempt: this._retryAttempt,
+							finalError: message.errorMessage,
+						});
+					}
+					this._retryAttempt = 0;
+					this._resetHintTierState();
+					this._resolveRetry();
+					return "not-handled";
+				}
+			}
 			// Profile-driven routing: "after-turn-budget" (Kimi) keeps 429s on the
 			// ordinary same-model budget; "tiered" (senpi default) uses hint tiers.
-			if (is429Class && retryProfile.fallback.rateLimited === "after-turn-budget") {
+			if (is429Class && !statedBeyondCap && retryProfile.fallback.rateLimited === "after-turn-budget") {
 				// Kimi profile: 429s consume the same-model budget like any transient.
 				// Mark tier-routed so the generic non-429 path below does not double-count.
 				is429TierRouted = true;
@@ -13546,26 +13575,8 @@ export class AgentSession {
 						return "not-handled";
 					}
 				}
-			} else if (is429Class) {
+			} else if (is429Class && !statedBeyondCap) {
 				const hintMs = this._getProviderRetryDelayMs(errorMessage);
-				// A pool refusal names the instant it can serve again. The tier ladder would spend its
-				// whole budget retrying before that instant (and tier2 clamps the wait instead of failing),
-				// so end the turn and let the provider-retry wake resume at the stated time.
-				const statedInstantMs = parseStatedRetryInstantMs(errorMessage, Date.now());
-				if (statedInstantMs !== undefined && statedInstantMs > this.settingsManager.getProviderRetrySettings().maxRetryDelayMs) {
-					if (this._retryAttempt > 0) {
-						this._emit({
-							type: "auto_retry_end",
-							success: false,
-							attempt: this._retryAttempt,
-							finalError: message.errorMessage,
-						});
-					}
-					this._retryAttempt = 0;
-					this._resetHintTierState();
-					this._resolveRetry();
-					return "not-handled";
-				}
 				const hintSettings = this.settingsManager.getHintPolicySettings();
 				const tier = classifyRateLimitedWait(hintMs, hintSettings);
 				is429TierRouted = true;
