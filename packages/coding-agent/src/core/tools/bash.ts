@@ -22,7 +22,13 @@ import { OutputAccumulator } from "./output-accumulator.ts";
 import { SecretOutputRedactor } from "./secret-output-redactor.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult } from "./truncate.ts";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	formatSize,
+	formatTruncationNotice,
+	type TruncationResult,
+} from "./truncate.ts";
 
 const MAX_TIMEOUT_MS = 2_147_483_647;
 /** Output limit of `structuredContent.output`, which programmatic callers such as codemode scripts receive. */
@@ -459,11 +465,16 @@ export function createShellToolDefinition(
 					const endLine = truncation.totalLines;
 					if (truncation.lastLinePartial) {
 						const lastLineSize = formatSize(output.getLastLineBytes());
-						notice = `[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
-					} else if (truncation.truncatedBy === "lines") {
-						notice = `[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
+						notice = `[truncated - showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}); Full output: ${snapshot.fullOutputPath}]`;
 					} else {
-						notice = `[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
+						notice = formatTruncationNotice({
+							kind: "tail",
+							startLine,
+							endLine,
+							totalLines: truncation.totalLines,
+							fullOutputPath: snapshot.fullOutputPath,
+							maxBytes: truncation.maxBytes,
+						});
 					}
 				}
 				const content: TextContent[] = [{ type: "text", text: notice === undefined ? text : `${text}\n` }];

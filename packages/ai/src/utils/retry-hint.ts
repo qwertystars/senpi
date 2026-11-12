@@ -250,6 +250,23 @@ export function parseRetryAfterMsMarker(message: string): number | undefined {
 	return Number.parseInt(m[1], 10);
 }
 
+/* ---------- stated pool unblock instant ---------- */
+
+// The anthropic-subscription pool names the instant it can serve again in its refusal prose
+// ("Soonest automatic retry: <ISO-8601 instant>"). Reading that instant here lets a session defer to
+// the wake the goal already honours instead of bursting 2s/4s/8s/... retries the pool has refused.
+// Only the phrase is matched: an ISO timestamp elsewhere in the text names something else.
+const STATED_RETRY_INSTANT_RE =
+	/\bSoonest automatic retry:\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/i;
+
+export function parseStatedRetryInstantMs(message: string, nowMs?: number): number | undefined {
+	const match = STATED_RETRY_INSTANT_RE.exec(message);
+	if (!match) return undefined;
+	const instantMs = Date.parse(match[1]);
+	if (Number.isNaN(instantMs)) return undefined;
+	return Math.max(0, instantMs - (nowMs ?? Date.now()));
+}
+
 /* ---------- wall-clock reset prose ---------- */
 
 // A reset written as a wall clock: "resets 12am (Asia/Seoul)", "resets Oct 2, 9am", "try again at 12:00 AM".

@@ -18,6 +18,9 @@ export type RenderedReadView = {
 		readonly rereads: readonly { readonly offset: number; readonly limit: number }[];
 	};
 };
+const READ_SUMMARY_MAX_LINES = 2000;
+const READ_SUMMARY_MAX_BYTES = 50 * 1024;
+
 export type ReadSummaryFallback =
 	| "unsupported_language"
 	| "prose_exempt"
@@ -38,19 +41,22 @@ export type SegmentedReadView =
 	  }
 	| { readonly status: "no_summary"; readonly reason: ReadSummaryFallback };
 
-/** Compose only untruncated default text reads; each reader owns its existing raw path. */
+/** Compose only unbounded default text reads; each reader owns its existing raw path. */
 export function createDefaultReadSummary(input: {
 	readonly path: string;
 	readonly text: string;
 	readonly offset?: number;
 	readonly limit?: number;
 	readonly folder?: ReadFolder;
-	readonly truncated: boolean;
 }): RenderedReadView | undefined {
-	const { path, text, offset, limit, folder, truncated } = input;
-	if (!folder || offset !== undefined || limit !== undefined || truncated || !isReadSummaryPath(path))
-		return undefined;
-	if (text.includes("\0") || text.split("\n").length < READ_FOLD_SETTINGS.minTotalLines) return undefined;
+	const { path, text, offset, limit, folder } = input;
+	if (!folder || offset !== undefined || limit !== undefined || !isReadSummaryPath(path)) return undefined;
+	// The fold owns its own input window (the full-read limits before the model-facing output
+	// budget moved to 40 KiB), so a 40-50 KiB foldable file still folds instead of being
+	// byte-truncated into a raw head.
+	const lines = text.endsWith("\n") ? text.split("\n").length - 1 : text.split("\n").length;
+	if (text.includes("\0") || lines < READ_FOLD_SETTINGS.minTotalLines) return undefined;
+	if (lines > READ_SUMMARY_MAX_LINES || Buffer.byteLength(text, "utf-8") > READ_SUMMARY_MAX_BYTES) return undefined;
 	const view = createSegmentedReadView({ text, parsed: folder.fold({ path, text, settings: READ_FOLD_SETTINGS }) });
 	switch (view.status) {
 		case "summary":

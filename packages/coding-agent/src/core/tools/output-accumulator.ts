@@ -5,7 +5,7 @@ import { open, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { TailWindow } from "./tail-window.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
+import { DEFAULT_MAX_LINES, type TruncationResult, resolveOutputMaxBytes, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
 	maxLines?: number;
@@ -63,7 +63,7 @@ export class OutputAccumulator {
 
 	constructor(options: OutputAccumulatorOptions = {}) {
 		this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
-		this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+		this.maxBytes = options.maxBytes ?? resolveOutputMaxBytes();
 		this.tempFilePrefix = options.tempFilePrefix ?? "pi-output";
 		this.tail = new TailWindow(Math.max(this.maxBytes * 2, 1));
 	}

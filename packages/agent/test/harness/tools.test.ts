@@ -727,7 +727,7 @@ describe("AgentHarness tools", () => {
 				BACKGROUND_CONTEXT,
 			);
 
-			expect(textOutput(result)).toMatch(/Showing last 50\.0KB of line 1 \(line is 58\.6KB\)\. Full output:/);
+			expect(textOutput(result)).toMatch(/Showing last 40\.0KB of line 1 \(line is 58\.6KB\)\. Full output:/);
 		});
 
 		it("prepares command, cwd, and an explicit environment with the turn context", async () => {

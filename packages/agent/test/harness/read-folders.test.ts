@@ -25,7 +25,6 @@ describe("selected read folders (#1639)", () => {
 				path: "return-types.ts",
 				text,
 				folder: agent.selectedReadFolder,
-				truncated: false,
 			})?.text ?? text;
 		const candidate = view(text);
 		for (let index = 0; index < 20; index++) {
