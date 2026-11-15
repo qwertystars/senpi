@@ -479,7 +479,26 @@ export default function compactionExtension(
 		signal?: AbortSignal,
 		onProgress?: (delta: string) => void,
 	): Promise<CompactionResult | undefined> {
-		const compaction = await runExtensionCompaction(ctx, snapshot, signal, onProgress);
+		const compaction = await runExtensionCompaction(ctx, snapshot, signal, onProgress, (report) => {
+			const data = {
+				variant: snapshot.promptVariant,
+				status: report.status,
+				restoredSection1: report.restored[1],
+				restoredSection2: report.restored[2],
+				restoredSection3: report.restored[3],
+				restoredSection4: report.restored[4],
+				restoredSection6: report.restored[6],
+				pointersRemoved: report.pointersRemoved,
+				trimmedLines: report.trimmedLines,
+				totalChars: report.totalChars,
+			};
+			if (report.status === "skipped") {
+				getLogger(ctx).info("summary_repair_skipped", { ...data, reason: report.skipReason });
+				return;
+			}
+			if (report.status === "repaired") getLogger(ctx).info("summary_repaired", data);
+			if (report.oversized) getLogger(ctx).info("summary_repair_oversize", data);
+		});
 		if (!compaction || signal?.aborted) return compaction;
 		if (
 			!wouldCompactionOverflow(

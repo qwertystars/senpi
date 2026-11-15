@@ -31,6 +31,7 @@ compaction/
 ├── todo-bridge.ts            # Carries todos through compaction so the summary preserves them
 ├── restoration-tracker.ts    # Post-compact: re-injects skill + file context (fork-introduced)
 ├── prompts.ts                # Compaction summarization prompt + system message
+├── summary-repair.ts         # Deterministic post-check of update-variant summaries: restores sections 1-3 and resolves 4/6 pointers against <previous-summary>
 ├── lane-policy.ts            # SDK-native lane detection; `external-owner` structured ownership
 ├── deterministic-fallback.ts # Classification + construction when summarization fails outright
 ├── summarization-retry.ts, transient-failure.ts, retained-message-safety.ts  # Retry/safety predicates

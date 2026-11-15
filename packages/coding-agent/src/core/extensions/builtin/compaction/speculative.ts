@@ -53,6 +53,7 @@ import {
 	isAssistantMessage,
 } from "./speculative-summary.ts";
 
+import { repairUpdateSummary, type SummaryRepairReport } from "./summary-repair.ts";
 import { allowSummarizationRetry, DEFAULT_SUMMARIZATION_RETRY_POLICY } from "./summarization-retry.ts";
 
 import { extractTaskIntent, resolveInheritedTaskIntent } from "./task-intent.ts";
@@ -277,6 +278,7 @@ export async function runExtensionCompaction(
 	snapshot: SpeculativeCompactionSnapshot,
 	signal?: AbortSignal,
 	onProgress?: CompactionProgressCallback,
+	onSummaryRepair?: (report: SummaryRepairReport) => void,
 ): Promise<CompactionResult | undefined> {
 	if (signal?.aborted) return undefined;
 	// A provider is authenticated for summarization by a resolved key, a credential
@@ -481,9 +483,16 @@ export async function runExtensionCompaction(
 		const tokenEstimate = estimateContextTokens(convertToLlm(messages)).tokens + approxTokens(summary);
 		const parsedSummary = extractTaskIntent(summary);
 		const taskIntent = parsedSummary.taskIntent ?? resolveInheritedTaskIntent(snapshot.branchEntries ?? []);
+		const previousSummary = snapshot.preparation.previousSummary;
+		let summaryText = parsedSummary.summaryText;
+		if (snapshot.promptVariant === "update" && previousSummary) {
+			const repair = repairUpdateSummary(previousSummary, summaryText);
+			summaryText = repair.summary;
+			if (repair.report.status !== "unchanged" || repair.report.oversized) onSummaryRepair?.(repair.report);
+		}
 
 		return {
-			summary: parsedSummary.summaryText,
+			summary: summaryText,
 			firstKeptEntryId: snapshot.preparation.firstKeptEntryId,
 			tokensBefore: snapshot.preparation.tokensBefore,
 			details: {
@@ -494,7 +503,7 @@ export async function runExtensionCompaction(
 					previousSummary: snapshot.preparation.previousSummary ?? "",
 					messagesToSummarize: snapshot.preparation.messagesToSummarize,
 					turnPrefixMessages: snapshot.preparation.turnPrefixMessages,
-					summary: parsedSummary.summaryText,
+					summary: summaryText,
 					tokensBefore: snapshot.preparation.tokensBefore,
 				}),
 				...(snapshot.origin ? { origin: snapshot.origin } : {}),
