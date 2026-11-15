@@ -28,6 +28,8 @@ const ALLOWED_KEYS = new Set([
 	"restoredSection4",
 	"restoredSection6",
 	"pointersRemoved",
+	"trimmedLines",
+	"totalChars",
 ]);
 const DEBUG_PREFIX = "[senpi-compaction]";
 const EVENTS = new Set([
@@ -55,6 +57,7 @@ const EVENTS = new Set([
 	"summary_failed",
 	"summary_repaired",
 	"summary_repair_skipped",
+	"summary_repair_oversize",
 	"remote_aborted",
 	"blocking_aborted",
 ]);
@@ -84,6 +87,7 @@ export type CompactionLoggerEvent =
 	| "summary_failed"
 	| "summary_repaired"
 	| "summary_repair_skipped"
+	| "summary_repair_oversize"
 	| "remote_aborted"
 	| "blocking_aborted";
 
@@ -111,6 +115,8 @@ export interface CompactionLoggerData {
 	restoredSection4?: number;
 	restoredSection6?: number;
 	pointersRemoved?: number;
+	trimmedLines?: number;
+	totalChars?: number;
 }
 
 export interface CompactionLogger {

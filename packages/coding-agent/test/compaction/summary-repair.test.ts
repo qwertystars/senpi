@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isPointerLine, repairUpdateSummary } from "../../src/core/extensions/builtin/compaction/summary-repair.ts";
+import {
+	isPointerLine,
+	repairUpdateSummary,
+	SECTION_4_CHAR_CAP,
+	SECTION_4_FLOOR_CHARS,
+	TOTAL_CHAR_GUARD,
+} from "../../src/core/extensions/builtin/compaction/summary-repair.ts";
 
 function summary(sections: Record<number, string[]>): string {
 	return Object.entries(sections)
@@ -291,5 +297,165 @@ describe("repairUpdateSummary synthetic replay", () => {
 			expect(bodyOf(current, 2)).toEqual(["- goal"]);
 			expect(current).not.toMatch(/previous[ -]summary/i);
 		}
+	});
+});
+
+function bulk(prefix: string, count: number, width = 80): string[] {
+	return Array.from({ length: count }, (_, index) => `- ${prefix} ${index} ${"x".repeat(width)}`);
+}
+
+function sectionChars(text: string, num: number): number {
+	let chars = 0;
+	let inside = false;
+	for (const line of text.split("\n")) {
+		const heading = /^##\s+(\d+)\./.exec(line);
+		if (heading) {
+			inside = Number(heading[1]) === num;
+			continue;
+		}
+		if (inside) chars += line.length + 1;
+	}
+	return chars;
+}
+
+const TRIM_LINE = /^- \(older progress trimmed: (\d+) lines\)$/;
+
+function trimmedCount(text: string): number[] {
+	return bodyOf(text, 4)
+		.map((line) => TRIM_LINE.exec(line))
+		.filter((match): match is RegExpExecArray => match !== null)
+		.map((match) => Number(match[1]));
+}
+
+describe("repairUpdateSummary section 4 cap", () => {
+	const progress = bulk("progress", 600);
+	const base = (section4: string[]) =>
+		summary({
+			1: ["- request A"],
+			2: ["- goal"],
+			3: ["- constraint A"],
+			4: section4,
+			5: ["- ctx"],
+			6: ["- question"],
+			7: ["- next"],
+		});
+	const previousBig = base(progress);
+	const generatedBig = base(["- model line A", POINTER, "- model line B"]);
+
+	it("caps section 4 at SECTION_4_CHAR_CAP, dropping the oldest restored lines and keeping the model's own", () => {
+		const { summary: repaired, report } = repairUpdateSummary(previousBig, generatedBig);
+		expect(sectionChars(repaired, 4)).toBeLessThanOrEqual(SECTION_4_CHAR_CAP);
+		const lines = bodyOf(repaired, 4);
+		expect(lines).toContain("- model line A");
+		expect(lines).toContain("- model line B");
+		const restored = lines.filter((line) => line.startsWith("- progress "));
+		const firstKept = Number(/progress (\d+) /.exec(restored[0] as string)?.[1]);
+		expect(restored).toEqual(progress.slice(firstKept));
+		expect(restored.at(-1)).toBe(progress[599]);
+		expect(lines).not.toContain(progress[0]);
+		expect(trimmedCount(repaired)).toEqual([600 - restored.length]);
+		expect(report.trimmedLines).toBe(600 - restored.length);
+		expect(report.restored[4]).toBe(restored.length);
+	});
+
+	it("puts the trim marker where the dropped lines began and keeps one cumulative marker", () => {
+		const first = repairUpdateSummary(previousBig, generatedBig).summary;
+		const [firstCount] = trimmedCount(first) as [number];
+		expect(bodyOf(first, 4).findIndex((line) => TRIM_LINE.test(line))).toBe(1);
+
+		const fresh = bulk("fresh", 40);
+		const next = base(["- model line C", ...fresh, POINTER]);
+		const second = repairUpdateSummary(first, next).summary;
+		const counts = trimmedCount(second);
+		expect(counts).toHaveLength(1);
+		expect(counts[0]).toBeGreaterThan(firstCount);
+		expect(sectionChars(second, 4)).toBeLessThanOrEqual(SECTION_4_CHAR_CAP);
+		expect(bodyOf(second, 4)).toContain("- model line C");
+		expect(bodyOf(second, 4)).toEqual(expect.arrayContaining(fresh));
+	});
+
+	it("is idempotent once capped", () => {
+		const once = repairUpdateSummary(previousBig, generatedBig).summary;
+		const again = repairUpdateSummary(previousBig, once);
+		expect(again.summary).toBe(once);
+		expect(again.report.status).toBe("unchanged");
+	});
+
+	it("never trims sections 1-3, 5 or 7", () => {
+		const big = (prefix: string) => bulk(prefix, 200, 60);
+		const previousWide = summary({
+			1: big("req"),
+			2: ["- goal"],
+			3: big("con"),
+			4: progress,
+			5: big("ctx"),
+			6: ["- question"],
+			7: big("next"),
+		});
+		const generated = summary({
+			1: [POINTER],
+			2: ["- goal"],
+			3: big("con"),
+			4: [POINTER],
+			5: big("ctx"),
+			6: ["- question"],
+			7: big("next"),
+		});
+		const { summary: repaired } = repairUpdateSummary(previousWide, generated);
+		expect(bodyOf(repaired, 1)).toEqual(big("req"));
+		expect(bodyOf(repaired, 3)).toEqual(big("con"));
+		expect(bodyOf(repaired, 5)).toEqual(big("ctx"));
+		expect(bodyOf(repaired, 7)).toEqual(big("next"));
+		expect(sectionChars(repaired, 4)).toBeLessThanOrEqual(SECTION_4_CHAR_CAP);
+	});
+});
+
+describe("repairUpdateSummary total guard", () => {
+	const shell = (sections: { 1: string[]; 4: string[] }) =>
+		summary({
+			1: sections[1],
+			2: ["- goal"],
+			3: ["- constraint"],
+			4: sections[4],
+			5: ["- ctx"],
+			6: ["- question"],
+			7: ["- next"],
+		});
+
+	it("trims section 4 oldest-first until the whole summary fits TOTAL_CHAR_GUARD", () => {
+		const request = bulk("req", 700, 90);
+		const modelProgress = bulk("note", 250, 80);
+		const input = shell({ 1: request, 4: modelProgress });
+		expect(input.length).toBeGreaterThan(TOTAL_CHAR_GUARD);
+		const { summary: repaired, report } = repairUpdateSummary(shell({ 1: request, 4: ["- seed"] }), input);
+		expect(repaired.length).toBeLessThanOrEqual(TOTAL_CHAR_GUARD);
+		expect(report.oversized).toBe(false);
+		expect(bodyOf(repaired, 1)).toEqual(request);
+		const kept = bodyOf(repaired, 4).filter((line) => line.startsWith("- note "));
+		expect(kept).toEqual(modelProgress.slice(modelProgress.length - kept.length));
+		expect(sectionChars(repaired, 4)).toBeGreaterThanOrEqual(SECTION_4_FLOOR_CHARS - 200);
+		expect(trimmedCount(repaired)).toEqual([modelProgress.length - kept.length]);
+		expect(repairUpdateSummary(shell({ 1: request, 4: ["- seed"] }), repaired).summary).toBe(repaired);
+	});
+
+	it("stops at the section 4 floor and reports oversized when the rest is too big", () => {
+		const request = bulk("req", 780, 90);
+		const modelProgress = bulk("note", 120, 80);
+		const input = shell({ 1: request, 4: modelProgress });
+		const { summary: repaired, report } = repairUpdateSummary(shell({ 1: request, 4: ["- seed"] }), input);
+		expect(sectionChars(repaired, 4)).toBeLessThanOrEqual(SECTION_4_FLOOR_CHARS);
+		expect(bodyOf(repaired, 4).length).toBeGreaterThan(0);
+		expect(bodyOf(repaired, 1)).toEqual(request);
+		expect(report.oversized).toBe(repaired.length > TOTAL_CHAR_GUARD);
+	});
+
+	it("stores a summary whose other sections alone exceed the guard and flags it", () => {
+		const request = bulk("req", 900, 90);
+		const input = shell({ 1: request, 4: bulk("note", 20, 80) });
+		const result = repairUpdateSummary(shell({ 1: request, 4: ["- seed"] }), input);
+		expect(result.summary).toBe(input);
+		expect(result.report.status).toBe("unchanged");
+		expect(result.report.oversized).toBe(true);
+		expect(result.report.totalChars).toBe(input.length);
 	});
 });

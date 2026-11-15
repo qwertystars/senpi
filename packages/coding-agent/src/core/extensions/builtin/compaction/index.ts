@@ -489,10 +489,15 @@ export default function compactionExtension(
 				restoredSection4: report.restored[4],
 				restoredSection6: report.restored[6],
 				pointersRemoved: report.pointersRemoved,
+				trimmedLines: report.trimmedLines,
+				totalChars: report.totalChars,
 			};
-			if (report.status === "skipped")
+			if (report.status === "skipped") {
 				getLogger(ctx).info("summary_repair_skipped", { ...data, reason: report.skipReason });
-			else getLogger(ctx).info("summary_repaired", data);
+				return;
+			}
+			if (report.status === "repaired") getLogger(ctx).info("summary_repaired", data);
+			if (report.oversized) getLogger(ctx).info("summary_repair_oversize", data);
 		});
 		if (!compaction || signal?.aborted) return compaction;
 		if (

@@ -488,7 +488,7 @@ export async function runExtensionCompaction(
 		if (snapshot.promptVariant === "update" && previousSummary) {
 			const repair = repairUpdateSummary(previousSummary, summaryText);
 			summaryText = repair.summary;
-			if (repair.report.status !== "unchanged") onSummaryRepair?.(repair.report);
+			if (repair.report.status !== "unchanged" || repair.report.oversized) onSummaryRepair?.(repair.report);
 		}
 
 		return {
