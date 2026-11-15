@@ -21,6 +21,13 @@ const ALLOWED_KEYS = new Set([
 	"remainingSec",
 	"count",
 	"durationMs",
+	"status",
+	"restoredSection1",
+	"restoredSection2",
+	"restoredSection3",
+	"restoredSection4",
+	"restoredSection6",
+	"pointersRemoved",
 ]);
 const DEBUG_PREFIX = "[senpi-compaction]";
 const EVENTS = new Set([
@@ -46,6 +53,8 @@ const EVENTS = new Set([
 	"emergency_prune",
 	"ineffective_counted",
 	"summary_failed",
+	"summary_repaired",
+	"summary_repair_skipped",
 	"remote_aborted",
 	"blocking_aborted",
 ]);
@@ -73,6 +82,8 @@ export type CompactionLoggerEvent =
 	| "idle_applied"
 	| "idle_apply_skipped"
 	| "summary_failed"
+	| "summary_repaired"
+	| "summary_repair_skipped"
 	| "remote_aborted"
 	| "blocking_aborted";
 
@@ -93,6 +104,13 @@ export interface CompactionLoggerData {
 	remainingSec?: number;
 	count?: number;
 	durationMs?: number;
+	status?: string;
+	restoredSection1?: number;
+	restoredSection2?: number;
+	restoredSection3?: number;
+	restoredSection4?: number;
+	restoredSection6?: number;
+	pointersRemoved?: number;
 }
 
 export interface CompactionLogger {
